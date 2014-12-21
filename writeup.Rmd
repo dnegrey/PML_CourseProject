@@ -1,0 +1,175 @@
+---
+title: "Predicting Exercise Technique"
+author: "Dan Negrey"
+date: "December 21, 2014"
+output: html_document
+---
+
+**Background**  
+
+Using devices such as *Jawbone Up*, *Nike FuelBand* and *Fitbit*, it is now 
+possible to collect a large amount of data about personal activity relatively 
+inexpensively. These types of devices are part of the quantified self 
+movement – a group of enthusiasts who take measurements about themselves 
+regularly to improve their health, find patterns in their behavior or 
+because they are tech geeks. One thing that people regularly do is quantify 
+*how much* of a particular activity they do, but they rarely quantify *how well* 
+they do it. For this project, we used accelerometer data collected on six 
+participants who were asked to perform barbell lifts correctly and 
+incorrectly in five different ways. Accelerometers were placed on the belt, 
+forearm, arm and dumbbell of each participant. The manner in which each lift 
+was performed was then recorded as follows:  
+
+- A: exactly according to the specification
+- B: throwing the elbows to the front
+- C: lifting the dumbbell only halfway
+- D: lowering the dumbbell only halfway
+- E: throwing the hips to the front  
+
+The data for this project comes from: 
+http://groupware.les.inf.puc-rio.br/har. The specific paper on this exercise 
+can be found [here](http://groupware.les.inf.puc-rio.br/work.jsf?p1=11201). 
+Our goal was to build a model to predict the manner in which the exercises 
+were done.  
+
+**Executive Summary**  
+
+The problem at hand is quite clearly a classification problem, in that we wish 
+to build a model that will classify a barbell lift into one of the five 
+categories above. Our main goal was to maximize the accuracy of the predictions. 
+As a result, random forest was selected as the model of choice due to its 
+tendency to provide highly accurate predictions. The model was fit using the 
+**randomForest** function from the *randomForest* package in R. Random 
+subsampling was used as the cross validation technique in order to estimate the 
+expected out of sample error. Given the large sample size (~20K), the training 
+data was split into further training and validation sets using a uniform random 
+split where 80% of the original training data was used to build the model and 
+the remaining 20% was used for validation. The misclassification rate of the 
+validation set was found to be 4.78%, and was used to estimate the expected 
+out of sample error. Put more clearly, we would expect the model to accurately 
+predict the barbell lift outcome category at least 95% of the time on similarly 
+collected data in the future.
+
+**Data Import and Cleaning**  
+
+The training data for the project is available at: 
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv. The paper 
+for this exercise (mentioned above in the background) describes the 17 features 
+that were selected as the most relevant based on a correlation based feature 
+selection algorithm. The dplyr package was used in deriving the subset of 
+these features that were not already present in the data. Two features, 
+*avg_roll_belt* and *var_roll_belt* have nearly all missing (NA) values and were 
+subsequently excluded from building the model.
+
+```{r echo = TRUE, comment = NA, cache = TRUE}
+
+## load necessary package(s)
+suppressMessages(library(dplyr))
+
+## download training data
+download.file(url = paste("https://d396qusza40orc.cloudfront.net/", 
+                          "predmachlearn/pml-training.csv", 
+                          sep = ""), 
+              destfile = ".//pml-training.csv", 
+              method = "curl")
+
+## import training data
+trn <- read.csv("./pml-training.csv")
+
+## investigate training data
+# dimensions
+dim(trn)
+# outcome variable ("classe")
+summary(trn$classe)
+
+## create necessary row-wise functions
+tMin <- function(...){min(c(...))}
+tMax <- function(...){max(c(...))}
+tVar <- function(...){var(c(...))}
+
+## create cleaner data frame with relevant identity fields and features
+training <- trn %>% 
+    rowwise() %>% 
+    mutate(min_accel_belt = tMin(accel_belt_x, accel_belt_y, accel_belt_z), 
+           max_accel_belt = tMax(accel_belt_x, accel_belt_y, accel_belt_z), 
+           rng_accel_belt = max_accel_belt - min_accel_belt, 
+           var_accel_belt = tVar(accel_belt_x, accel_belt_y, accel_belt_z), 
+           var_gyros_belt = tVar(gyros_belt_x, gyros_belt_y, gyros_belt_z), 
+           var_magnet_belt = tVar(magnet_belt_x, magnet_belt_y, magnet_belt_z), 
+           var_accel_arm = tVar(accel_arm_x, accel_arm_y, accel_arm_z), 
+           min_magnet_arm = tMin(magnet_arm_x, magnet_arm_y, magnet_arm_z), 
+           max_magnet_arm = tMax(magnet_arm_x, magnet_arm_y, magnet_arm_z), 
+           max_accel_dumbbell = tMax(accel_dumbbell_x, accel_dumbbell_y, accel_dumbbell_z), 
+           var_gyros_dumbbell = tVar(gyros_dumbbell_x, gyros_dumbbell_y, gyros_dumbbell_z), 
+           min_magnet_dumbbell = tMin(magnet_dumbbell_x, magnet_dumbbell_y, magnet_dumbbell_z), 
+           max_magnet_dumbbell = tMax(magnet_dumbbell_x, magnet_dumbbell_y, magnet_dumbbell_z), 
+           min_gyros_forearm = tMin(gyros_forearm_x, gyros_forearm_y, gyros_forearm_z), 
+           max_gyros_forearm = tMax(gyros_forearm_x, gyros_forearm_y, gyros_forearm_z)) %>% 
+    select(X, user_name, classe, 
+           avg_roll_belt, 
+           var_roll_belt, 
+           max_accel_belt, 
+           rng_accel_belt, 
+           var_accel_belt, 
+           var_gyros_belt, 
+           var_magnet_belt, 
+           var_accel_arm, 
+           min_magnet_arm, 
+           max_magnet_arm, 
+           max_accel_dumbbell, 
+           var_gyros_dumbbell, 
+           min_magnet_dumbbell, 
+           max_magnet_dumbbell, 
+           pitch_forearm, 
+           min_gyros_forearm, 
+           max_gyros_forearm)
+
+## investigate the presence of missing values
+sapply(training, 
+       function(x){sum(is.na(x))})
+
+```
+
+**Random Forest Model**  
+
+Random subsampling was used to split the training data into further 
+training (80%) and validation (20%) sets for cross validation. A random forest 
+model was then built on the training subset. Using the model, we then predicted 
+the outcome on the validation sample and measured the misclassification rate as 
+the estimate for the out of sample error (4.78%). As an added measure of 
+confidence, we see that the out-of-bag (OOB) error estimate for our model is 
+4.32%, which is in line with our cross validation estimate and could arguably 
+be used as well due to the stochastic nature of random forests.  
+
+```{r echo = TRUE, comment = NA, cache = TRUE}
+
+## load necessary package(s)
+suppressMessages(library(randomForest))
+suppressMessages(library(caret))
+
+## create logical vector for cross validation split
+set.seed(33833)
+inTrain <- runif(nrow(training)) <= 0.80
+
+## split into training and validation subsets
+t <- training[inTrain, -(c(1:2, 4:5))]
+v <- training[!inTrain, -(c(1:2, 4:5))]
+
+## build random forest model and print results
+modFit <- randomForest(classe ~ ., data = t, importance = TRUE)
+modFit
+
+## estimate out of sample error by measuring misclassification on validation
+1 - sum(predict(modFit, newdata = v) == v$classe)/nrow(v)
+
+## print the variable importance of the model
+imp <- varImp(modFit, type = 2)
+imp$Variable <- row.names(imp)
+row.names(imp) <- NULL
+imp[order(-imp$Overall), 2:1]
+
+```
+
+
+
+
